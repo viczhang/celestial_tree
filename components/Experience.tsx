@@ -1,5 +1,5 @@
-import React, { Suspense, useRef } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import React, { Suspense } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import * as THREE from 'three';
@@ -20,22 +20,17 @@ const CameraHandler: React.FC<{ mode: VisualMode }> = ({ mode }) => {
     const targetPos = new THREE.Vector3();
     
     if (mode === VisualMode.GALAXY) {
-      // 45 degreeish view: Elevated Y, distant Z (e.g., [0, 8, 12])
-      targetPos.set(0, 8, 12);
+      targetPos.set(0, 10, 15);
+    } else if (mode === VisualMode.TREE) {
+      targetPos.set(0, 1, 14); // Look slightly up at the tree
     } else {
-      // Front view for Tree and Text
       targetPos.set(0, 0, 14);
     }
 
-    // Smoothly interpolate camera position
-    // We use a small lerp factor for a slow, cinematic drift
-    const step = 0.02;
-    state.camera.position.lerp(targetPos, step);
+    state.camera.position.lerp(targetPos, 0.02);
     
-    // If OrbitControls are active (makeDefault), we need to update them
-    // to reflect the manual camera position change, otherwise they might snap back.
     if (state.controls) {
-      // @ts-ignore - OrbitControls type definition might be missing update in strict contexts
+      // @ts-ignore
       state.controls.update();
     } else {
       state.camera.lookAt(0, 0, 0);
@@ -48,16 +43,16 @@ const Experience: React.FC<ExperienceProps> = ({ mode, rotation, text, textSize 
   return (
     <div className="fixed inset-0 bg-black">
       <Canvas 
+        dpr={[1, 2]} // Handle high-dpi screens
         camera={{ position: [0, 0, 14], fov: 45 }}
         gl={{ 
-          antialias: true,
+          antialias: false, // Rely on post-processing or high DPR
           toneMapping: THREE.ReinhardToneMapping,
-          toneMappingExposure: 1.2
+          toneMappingExposure: 1.5,
+          powerPreference: "high-performance"
         }}
       >
-        <color attach="background" args={['#020202']} />
-        
-        <ambientLight intensity={0.5} />
+        <color attach="background" args={['#050505']} />
         
         <CameraHandler mode={mode} />
 
@@ -67,12 +62,13 @@ const Experience: React.FC<ExperienceProps> = ({ mode, rotation, text, textSize 
           <TextSparkles mode={mode} />
         </Suspense>
 
-        <EffectComposer disableNormalPass>
+        <EffectComposer multisampling={0} disableNormalPass>
           <Bloom 
-            intensity={1.5} 
-            luminanceThreshold={0.2} 
+            intensity={2.0} 
+            luminanceThreshold={0.4} 
             luminanceSmoothing={0.9} 
             mipmapBlur 
+            radius={0.6}
           />
         </EffectComposer>
 
@@ -80,7 +76,7 @@ const Experience: React.FC<ExperienceProps> = ({ mode, rotation, text, textSize 
           makeDefault
           enableZoom={true} 
           enablePan={false} 
-          maxDistance={30} 
+          maxDistance={40} 
           minDistance={2} 
         />
       </Canvas>

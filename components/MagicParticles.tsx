@@ -11,22 +11,15 @@ interface MagicParticlesProps {
   textSize?: number;
 }
 
-interface ParticleData {
-  treeData: Float32Array;
-  galaxyData: Float32Array;
-  textData: Float32Array;
-  colors: Float32Array;
-}
-
 interface ParticleLayerProps {
   mode: VisualMode;
   rotationStrength: number;
   speedMultiplier: number;
   opacity: number;
   size: number;
-  data: ParticleData;
+  data: any;
   enableSparkle: boolean;
-  texture?: THREE.Texture | null;
+  texture: THREE.Texture;
 }
 
 const ParticleLayer: React.FC<ParticleLayerProps> = ({ 
@@ -45,7 +38,9 @@ const ParticleLayer: React.FC<ParticleLayerProps> = ({
   const initialPositions = useMemo(() => new Float32Array(data.treeData), [data]);
   const initialColors = useMemo(() => new Float32Array(data.colors), [data]);
 
-  // Reset rotation when switching to TEXT mode so it's readable immediately
+  // Current visible positions buffer
+  const currentPositions = useRef(new Float32Array(data.treeData));
+
   useEffect(() => {
     if (mode === VisualMode.TEXT && pointsRef.current) {
       pointsRef.current.rotation.y = 0;
@@ -57,54 +52,63 @@ const ParticleLayer: React.FC<ParticleLayerProps> = ({
 
     const time = state.clock.elapsedTime;
     
-    // Rotation logic
+    // Smooth Rotation logic
     if (mode === VisualMode.TEXT) {
-      // For text, allow full rotation interaction via mouse (no auto-spin)
-      const targetRotationY = rotationStrength * 1.5;
+      const targetRotationY = rotationStrength * 1.0;
+      pointsRef.current.rotation.y = THREE.MathUtils.lerp(
+        pointsRef.current.rotation.y, 
+        targetRotationY, 
+        delta * 3.0
+      );
+    } else {
+      const targetRotationY = (rotationStrength * 2.0) + (time * 0.1);
       pointsRef.current.rotation.y = THREE.MathUtils.lerp(
         pointsRef.current.rotation.y, 
         targetRotationY, 
         delta * 2.0
       );
-    } else {
-      // Continuous rotation for Tree and Galaxy
-      const targetRotationY = (rotationStrength * 1.5) + (time * 0.05);
-      pointsRef.current.rotation.y = THREE.MathUtils.lerp(
-        pointsRef.current.rotation.y, 
-        targetRotationY, 
-        delta * 1.5
-      );
     }
 
+    // Determine target state
+    let targetArr = data.treeData;
+    if (mode === VisualMode.GALAXY) targetArr = data.galaxyData;
+    else if (mode === VisualMode.TEXT) targetArr = data.textData;
+    
+    // Physics / Interpolation
     const positions = geometryRef.current.attributes.position.array as Float32Array;
-    
-    let targetPositions = data.treeData;
-    if (mode === VisualMode.GALAXY) targetPositions = data.galaxyData;
-    else if (mode === VisualMode.TEXT) targetPositions = data.textData;
-    
-    const lerpSpeed = 3.0 * speedMultiplier;
+    const lerpSpeed = 4.0 * speedMultiplier;
+    const wobble = 0.02;
 
     for (let i = 0; i < positions.length; i++) {
-      positions[i] = THREE.MathUtils.lerp(positions[i], targetPositions[i], delta * lerpSpeed);
-      if (enableSparkle && Math.random() > 0.99) {
-          positions[i] += (Math.random() - 0.5) * 0.02;
+      // Interpolate towards target
+      currentPositions.current[i] = THREE.MathUtils.lerp(
+        currentPositions.current[i], 
+        targetArr[i], 
+        delta * lerpSpeed
+      );
+      
+      // Apply to geometry with some noise
+      if (enableSparkle) {
+         positions[i] = currentPositions.current[i] + Math.sin(time * 2 + i) * wobble;
+      } else {
+         positions[i] = currentPositions.current[i];
       }
     }
     geometryRef.current.attributes.position.needsUpdate = true;
 
+    // Color/Sparkle Animation
     const colors = geometryRef.current.attributes.color.array as Float32Array;
     const baseColors = data.colors;
     
     for (let i = 0; i < colors.length / 3; i++) {
       const i3 = i * 3;
-      const phase = i * 0.1;
+      
       let brightness = 1.0;
-
       if (enableSparkle) {
-        const t = time * 3.0 + phase;
-        brightness = 0.4 + 0.6 * Math.pow(Math.sin(t), 12);
-      } else {
-        brightness = 0.5 + 0.2 * Math.sin(time * 1.0 + phase);
+        // Twinkle effect
+        const speed = 3.0 + (i % 5);
+        const val = Math.sin(time * speed + i);
+        brightness = 0.5 + 0.9 * Math.pow((val + 1) / 2, 4); // Sharp peaks for sparkles
       }
       
       colors[i3]     = baseColors[i3] * brightness;
@@ -134,13 +138,14 @@ const ParticleLayer: React.FC<ParticleLayerProps> = ({
       </bufferGeometry>
       <pointsMaterial
         size={size}
-        map={texture || undefined}
+        map={texture}
         vertexColors
         transparent
         opacity={opacity}
         blending={THREE.AdditiveBlending}
         depthWrite={false}
         sizeAttenuation={true}
+        alphaTest={0.01}
       />
     </points>
   );
@@ -149,48 +154,59 @@ const ParticleLayer: React.FC<ParticleLayerProps> = ({
 const MagicParticles: React.FC<MagicParticlesProps> = ({ mode, rotationStrength, text, textSize }) => {
   const data = useMemo(() => generateParticles(text, textSize), [text, textSize]);
 
-  // Generate a soft glow texture for "fuzzy" particles
+  // Generate a Star/Lens Flare texture
   const particleTexture = useMemo(() => {
     const canvas = document.createElement('canvas');
-    canvas.width = 32;
-    canvas.height = 32;
+    canvas.width = 64;
+    canvas.height = 64;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
+    if (!ctx) return new THREE.Texture();
     
-    // Soft radial gradient from white to transparent
-    const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    // Clear
+    ctx.clearRect(0, 0, 64, 64);
+    
+    // Center glow
+    const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
     gradient.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
-    gradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.5)');
-    gradient.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)'); // Use black/transparent for blending
-    
-    ctx.clearRect(0, 0, 32, 32);
+    gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
+    gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.2)');
+    gradient.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
     ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 32, 32);
-    
+    ctx.fillRect(0, 0, 64, 64);
+
+    // Star spikes (Cross shape)
+    ctx.beginPath();
+    ctx.moveTo(32, 0); ctx.lineTo(32, 64);
+    ctx.moveTo(0, 32); ctx.lineTo(64, 32);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
     const texture = new THREE.CanvasTexture(canvas);
-    texture.magFilter = THREE.LinearFilter;
-    texture.minFilter = THREE.LinearFilter;
+    texture.premultiplyAlpha = true;
     return texture;
   }, []);
 
   return (
     <group>
+      {/* Primary bright layer */}
       <ParticleLayer 
         mode={mode} 
         rotationStrength={rotationStrength} 
         speedMultiplier={1.0} 
-        opacity={0.8} 
-        size={0.15} 
+        opacity={1.0} 
+        size={0.25} 
         data={data}
         enableSparkle={true}
         texture={particleTexture}
       />
+      {/* Secondary ambient halo layer */}
       <ParticleLayer 
         mode={mode} 
         rotationStrength={rotationStrength} 
-        speedMultiplier={0.5} 
+        speedMultiplier={0.8} 
         opacity={0.3} 
-        size={0.12} 
+        size={0.5} 
         data={data}
         enableSparkle={false}
         texture={particleTexture}
